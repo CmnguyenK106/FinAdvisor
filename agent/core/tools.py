@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import requests
 
@@ -46,10 +46,3 @@ class DataGatewayClient:
     def fundamental(self, symbol: str) -> Dict[str, Any]:
 	    return self._get("/data/fundamental", {"symbol": symbol})
 
-    def news(self, query: str, date_from: Optional[str] = None, date_to: Optional[str] = None) -> Dict[str, Any]:
-        params: Dict[str, Any] = {"query": query}
-        if date_from:
-            params["from"] = date_from
-        if date_to:
-            params["to"] = date_to
-        return self._get("/data/news", params)

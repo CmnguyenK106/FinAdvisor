@@ -37,7 +37,7 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
                 "You are a finance planning assistant. Extract the ticker symbol, "
                 "decide which data you need, and suggest valuation models. "
                 "Return JSON with keys: symbol, needs_price, needs_financials, "
-                "needs_ratios, needs_news, valuation_models."
+                "needs_ratios, valuation_models."
             )
         )
         response = llm.invoke([system, HumanMessage(content=query)])
@@ -50,7 +50,6 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
                 "needs_price": True,
                 "needs_financials": True,
                 "needs_ratios": True,
-                "needs_news": True,
                 "valuation_models": ["multiples", "dcf"],
             }
 
@@ -80,16 +79,6 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
 
         state["data"] = data
         state["warnings"] = warnings
-        return state
-
-    def fetch_news(state: AgentState) -> AgentState:
-        plan = state.get("plan", {})
-        symbol = state.get("symbol")
-        if not plan.get("needs_news"):
-            return state
-
-        query = symbol or state.get("query", "")
-        state["news"] = data_client.news(query)
         return state
 
     def run_models(state: AgentState) -> AgentState:
@@ -166,15 +155,14 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
     def draft_answer(state: AgentState) -> AgentState:
         system = SystemMessage(
             content=(
-                "You are an investment analyst. Use the provided valuations and news "
-                "to answer the query. Provide a short recommendation and cite sources."
+                "You are an investment analyst. Use the provided valuations to answer "
+                "the query. Provide a short recommendation and cite sources."
             )
         )
         payload = {
             "query": state.get("query"),
             "symbol": state.get("symbol"),
             "valuations": state.get("valuations", []),
-            "news": state.get("news", {}),
         }
         response = llm.invoke([system, HumanMessage(content=json.dumps(payload))])
         state["answer"] = response.content
@@ -192,15 +180,13 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
 
     graph.add_node("plan", plan_step)
     graph.add_node("fetch_data", fetch_data)
-    graph.add_node("fetch_news", fetch_news)
     graph.add_node("run_models", run_models)
     graph.add_node("draft_answer", draft_answer)
     graph.add_node("evaluate", evaluate)
 
     graph.set_entry_point("plan")
     graph.add_edge("plan", "fetch_data")
-    graph.add_edge("fetch_data", "fetch_news")
-    graph.add_edge("fetch_news", "run_models")
+    graph.add_edge("fetch_data", "run_models")
     graph.add_edge("run_models", "draft_answer")
     graph.add_edge("draft_answer", "evaluate")
 

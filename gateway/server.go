@@ -38,7 +38,7 @@ func (s *server) registerRoutes() {
 	// Returns the final result for a given run ID.
 	s.mux.HandleFunc("/api/agent/result/", s.handleAgentResult)
 
-	// Data gateway endpoints (finance + news).
+	// Data gateway endpoints (finance).
 	s.mux.HandleFunc("/data/price", s.handleDataPrice)
 	s.mux.HandleFunc("/data/fundamental", s.handleDataFundamental)
 	s.mux.HandleFunc("/data/financials", s.handleDataFinancials)
@@ -46,7 +46,6 @@ func (s *server) registerRoutes() {
 	s.mux.HandleFunc("/data/ratios", s.handleDataRatios)
 	s.mux.HandleFunc("/data/estimated-price", s.handleDataEstimatedPrice)
 	s.mux.HandleFunc("/data/posts", s.handleDataPosts)
-	s.mux.HandleFunc("/data/news", s.handleDataNews)
 }
 
 func (s *server) listenAndServe() error {

@@ -18,8 +18,6 @@ type config struct {
 	fireantToken    string
 	fireantMinDelay int
 	fireantCacheTTL int
-	newsDataBaseURL string
-	newsDataAPIKey  string
 }
 
 // loadConfig reads environment variables for gateway configuration.
@@ -37,8 +35,6 @@ func loadConfig() config {
 		fireantToken:    token,
 		fireantMinDelay: envOrDefaultInt("FIREANT_MIN_INTERVAL_MS", 300),
 		fireantCacheTTL: envOrDefaultInt("FIREANT_CACHE_TTL_SEC", 300),
-		newsDataBaseURL: os.Getenv("NEWSDATA_BASE_URL"),
-		newsDataAPIKey:  os.Getenv("NEWSDATA_API_KEY"),
 	}
 }
 

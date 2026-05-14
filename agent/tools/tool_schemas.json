@@ -79,21 +79,6 @@
     }
   },
   {
-    "name": "get_news",
-    "description": "Fetch Vietnam finance news from NewsData.io.",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "query": {"type": "string"},
-        "from": {"type": "string", "description": "YYYY-MM-DD"},
-        "to": {"type": "string", "description": "YYYY-MM-DD"},
-        "language": {"type": "string", "default": "vi"},
-        "page": {"type": "integer", "default": 1}
-      },
-      "required": ["query"]
-    }
-  },
-  {
     "name": "valuation_multiples",
     "description": "Estimate fair price using valuation multiples (P/E, EV/EBITDA, P/B).",
     "parameters": {

@@ -1,7 +1,7 @@
 package main
 
 /*
-Purpose: Defines a data gateway client for FireAnt and NewsData providers.
+Purpose: Defines a data gateway client for FireAnt providers.
 */
 
 import (
@@ -20,8 +20,7 @@ import (
 )
 
 var (
-	errFireAntNotConfigured  = errors.New("fireant not configured")
-	errNewsDataNotConfigured = errors.New("newsdata not configured")
+	errFireAntNotConfigured = errors.New("fireant not configured")
 )
 
 type dataGateway struct {
@@ -29,8 +28,6 @@ type dataGateway struct {
 	fireantToken    string
 	fireantMinDelay time.Duration
 	fireantCacheTTL time.Duration
-	newsDataBaseURL string
-	newsDataAPIKey  string
 	client          *http.Client
 	cache           memory.Cache
 	mu              sync.Mutex
@@ -53,8 +50,6 @@ func newDataGateway(cfg config, cache memory.Cache) *dataGateway {
 		fireantToken:    cfg.fireantToken,
 		fireantMinDelay: minDelay,
 		fireantCacheTTL: cacheTTL,
-		newsDataBaseURL: cfg.newsDataBaseURL,
-		newsDataAPIKey:  cfg.newsDataAPIKey,
 		client: &http.Client{
 			Timeout: 20 * time.Second,
 		},
@@ -208,33 +203,6 @@ func (g *dataGateway) posts(ctx context.Context, symbol string, postType, offset
 	}, nil
 }
 
-func (g *dataGateway) news(ctx context.Context, query, from, to string) (dataEnvelope, error) {
-	if g.newsDataBaseURL == "" {
-		return dataEnvelope{}, errNewsDataNotConfigured
-	}
-
-	path := "/api/1/news"
-	queryParams := url.Values{}
-	queryParams.Set("query", query)
-	if from != "" {
-		queryParams.Set("from", from)
-	}
-	if to != "" {
-		queryParams.Set("to", to)
-	}
-
-	var raw map[string]interface{}
-	if err := g.newsDataGet(ctx, path, queryParams, &raw); err != nil {
-		return dataEnvelope{}, err
-	}
-
-	return dataEnvelope{
-		Source:      "newsdata",
-		RetrievedAt: time.Now().UTC(),
-		Data:        raw,
-	}, nil
-}
-
 func (g *dataGateway) fireantGet(ctx context.Context, path string, query url.Values, out interface{}) error {
 	if g.fireantBaseURL == "" || g.fireantToken == "" {
 		return errFireAntNotConfigured
@@ -285,34 +253,6 @@ func (g *dataGateway) fireantGet(ctx context.Context, path string, query url.Val
 	}
 
 	return nil
-}
-
-func (g *dataGateway) newsDataGet(ctx context.Context, path string, query url.Values, out interface{}) error {
-	if g.newsDataBaseURL == "" || g.newsDataAPIKey == "" {
-		return errNewsDataNotConfigured
-	}
-	if query == nil {
-		query = url.Values{}
-	}
-	query.Set("apikey", g.newsDataAPIKey)
-
-	requestURL := g.buildURL(g.newsDataBaseURL, path, query)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("newsdata api error: %d", resp.StatusCode)
-	}
-
-	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 func (g *dataGateway) buildURL(baseURL, path string, query url.Values) string {

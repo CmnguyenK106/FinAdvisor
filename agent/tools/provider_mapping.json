@@ -40,21 +40,6 @@
           "query": ["type", "offset", "limit"]
         }
       }
-    },
-    "newsdata": {
-      "base_url_env": "NEWSDATA_BASE_URL",
-      "auth": {
-        "type": "query",
-        "name": "apikey",
-        "env": "NEWSDATA_API_KEY"
-      },
-      "endpoints": {
-        "get_news": {
-          "method": "GET",
-          "path": "/api/1/news",
-          "query": ["query", "from", "to", "language", "page"]
-        }
-      }
     }
   }
 }

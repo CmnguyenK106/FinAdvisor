@@ -1,7 +1,7 @@
 package main
 
 /*
-Purpose: Implements HTTP handlers for data gateway endpoints (FireAnt + NewsData).
+Purpose: Implements HTTP handlers for data gateway endpoints (FireAnt).
 */
 
 import (
@@ -77,30 +77,6 @@ func (s *server) handleDataRatios(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := s.data.fundamental(r.Context(), symbol)
-	if err != nil {
-		handleDataError(w, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, res)
-}
-
-func (s *server) handleDataNews(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
-		return
-	}
-
-	query := strings.TrimSpace(r.URL.Query().Get("query"))
-	if query == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query is required"})
-		return
-	}
-
-	from := strings.TrimSpace(r.URL.Query().Get("from"))
-	to := strings.TrimSpace(r.URL.Query().Get("to"))
-
-	res, err := s.data.news(r.Context(), query, from, to)
 	if err != nil {
 		handleDataError(w, err)
 		return
@@ -205,8 +181,6 @@ func handleDataError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errFireAntNotConfigured):
 		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "fireant not configured"})
-	case errors.Is(err, errNewsDataNotConfigured):
-		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "newsdata not configured"})
 	default:
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "data provider error"})
 	}

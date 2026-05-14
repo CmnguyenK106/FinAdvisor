@@ -29,11 +29,11 @@ TestResults.xml
 api-ex*.go
 
 # Root app files (exclude from this repo)
-main.go
-Makefile
-.air.toml
-static/
-templates/
+/main.go
+/Makefile
+/.air.toml
+/static/
+/templates/
 
 # Python
 __pycache__/
