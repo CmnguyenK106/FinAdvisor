@@ -1,0 +1,185 @@
+[
+  {
+    "name": "get_price_history",
+    "description": "Fetch historical prices for a Vietnam stock from FireAnt.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "symbol": {"type": "string", "description": "Ticker symbol (e.g., VNM)."},
+        "range": {"type": "string", "description": "Shortcut range: 1d, 1w, 1m, 6m, 1y, 3y, 5y"},
+        "startDate": {"type": "string", "description": "ISO 8601 (e.g., 2024-01-01T00:00:00Z)"},
+        "endDate": {"type": "string", "description": "ISO 8601"},
+        "limit": {"type": "integer", "description": "Max sessions"}
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "get_fundamental",
+    "description": "Fetch fundamental ratios (P/E, P/B, EPS, ROE) from FireAnt.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "symbol": {"type": "string"}
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "get_financial_reports",
+    "description": "Fetch hierarchical financial reports from FireAnt.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "symbol": {"type": "string"},
+        "type": {"type": "integer", "enum": [1, 2, 3, 4]},
+        "year": {"type": "integer"},
+        "quarter": {"type": "integer"},
+        "limit": {"type": "integer"}
+      },
+      "required": ["symbol", "type", "year", "quarter"]
+    }
+  },
+  {
+    "name": "get_financial_period",
+    "description": "Fetch flattened financial values for a given period from FireAnt.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "symbol": {"type": "string"},
+        "year": {"type": "integer"},
+        "quarter": {"type": "integer", "description": "Use 0 for full year"}
+      },
+      "required": ["symbol", "year", "quarter"]
+    }
+  },
+  {
+    "name": "get_estimated_price",
+    "description": "Fetch FireAnt fair-value estimates.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "symbol": {"type": "string"}
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "get_posts",
+    "description": "Fetch FireAnt posts/news for a symbol.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "symbol": {"type": "string"},
+        "type": {"type": "integer", "enum": [0, 1]},
+        "offset": {"type": "integer"},
+        "limit": {"type": "integer"}
+      },
+      "required": ["symbol"]
+    }
+  },
+  {
+    "name": "get_news",
+    "description": "Fetch Vietnam finance news from NewsData.io.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {"type": "string"},
+        "from": {"type": "string", "description": "YYYY-MM-DD"},
+        "to": {"type": "string", "description": "YYYY-MM-DD"},
+        "language": {"type": "string", "default": "vi"},
+        "page": {"type": "integer", "default": 1}
+      },
+      "required": ["query"]
+    }
+  },
+  {
+    "name": "valuation_multiples",
+    "description": "Estimate fair price using valuation multiples (P/E, EV/EBITDA, P/B).",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eps": {"type": "number"},
+        "ebitda": {"type": "number"},
+        "book_value_per_share": {"type": "number"},
+        "shares_outstanding": {"type": "number"},
+        "net_debt": {"type": "number", "default": 0},
+        "pe_multiple": {"type": "number"},
+        "ev_ebitda_multiple": {"type": "number"},
+        "pb_multiple": {"type": "number"},
+        "data_recency_days": {"type": "integer"},
+        "peer_count": {"type": "integer"}
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "valuation_dcf",
+    "description": "Estimate fair price using discounted cash flow.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "fcfs": {"type": "array", "items": {"type": "number"}},
+        "discount_rate": {"type": "number"},
+        "terminal_growth_rate": {"type": "number"},
+        "shares_outstanding": {"type": "number"},
+        "net_debt": {"type": "number", "default": 0},
+        "data_recency_days": {"type": "integer"}
+      },
+      "required": ["fcfs", "discount_rate", "terminal_growth_rate", "shares_outstanding"]
+    }
+  },
+  {
+    "name": "valuation_ddm",
+    "description": "Estimate fair price using dividend discount model.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "dividend_per_share": {"type": "number"},
+        "dividend_growth_rate": {"type": "number"},
+        "discount_rate": {"type": "number"},
+        "data_recency_days": {"type": "integer"}
+      },
+      "required": ["dividend_per_share", "dividend_growth_rate", "discount_rate"]
+    }
+  },
+  {
+    "name": "valuation_book_value",
+    "description": "Estimate fair price using book value and target P/B multiple.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "book_value_per_share": {"type": "number"},
+        "target_pb": {"type": "number"},
+        "data_recency_days": {"type": "integer"}
+      },
+      "required": ["book_value_per_share", "target_pb"]
+    }
+  },
+  {
+    "name": "valuation_graham",
+    "description": "Estimate fair price using the Graham number.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "eps": {"type": "number"},
+        "book_value_per_share": {"type": "number"},
+        "data_recency_days": {"type": "integer"}
+      },
+      "required": ["eps", "book_value_per_share"]
+    }
+  },
+  {
+    "name": "estimate_cost_of_equity_capm",
+    "description": "Compute cost of equity using CAPM.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "risk_free_rate": {"type": "number"},
+        "beta": {"type": "number"},
+        "market_risk_premium": {"type": "number"}
+      },
+      "required": ["risk_free_rate", "beta", "market_risk_premium"]
+    }
+  }
+]

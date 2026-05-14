@@ -21,3 +21,47 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+
+# Secrets
+.env
+
+# Examples (do not publish)
+api-ex*.go
+
+# Root app files (exclude from this repo)
+main.go
+Makefile
+.air.toml
+static/
+templates/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.envrc
+
+# Go
+*.exe
+*.out
+*.test
+*.prof
+bin/
+
+# Node
+node_modules/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+
+# Runtime data
+tmp/

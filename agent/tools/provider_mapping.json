@@ -1,0 +1,60 @@
+{
+  "providers": {
+    "fireant": {
+      "base_url_env": "FIREANT_BASE_URL",
+      "auth": {
+        "type": "header",
+        "name": "Authorization",
+        "env": "FIREANT_TOKEN",
+        "format": "Bearer {token}"
+      },
+      "endpoints": {
+        "get_price_history": {
+          "method": "GET",
+          "path": "/symbols/{symbol}/historical-quotes",
+          "query": ["startDate", "endDate", "limit"]
+        },
+        "get_fundamental": {
+          "method": "GET",
+          "path": "/symbols/{symbol}/fundamental",
+          "query": []
+        },
+        "get_financial_reports": {
+          "method": "GET",
+          "path": "/symbols/{symbol}/full-financial-reports",
+          "query": ["type", "year", "quarter", "limit"]
+        },
+        "get_financial_period": {
+          "method": "GET",
+          "path": "/symbols/{symbol}/financial-data-by-period",
+          "query": ["year", "quarter"]
+        },
+        "get_estimated_price": {
+          "method": "GET",
+          "path": "/symbols/{symbol}/estimated-price",
+          "query": []
+        },
+        "get_posts": {
+          "method": "GET",
+          "path": "/symbols/{symbol}/posts",
+          "query": ["type", "offset", "limit"]
+        }
+      }
+    },
+    "newsdata": {
+      "base_url_env": "NEWSDATA_BASE_URL",
+      "auth": {
+        "type": "query",
+        "name": "apikey",
+        "env": "NEWSDATA_API_KEY"
+      },
+      "endpoints": {
+        "get_news": {
+          "method": "GET",
+          "path": "/api/1/news",
+          "query": ["query", "from", "to", "language", "page"]
+        }
+      }
+    }
+  }
+}
