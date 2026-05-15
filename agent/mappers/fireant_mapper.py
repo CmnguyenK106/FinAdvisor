@@ -137,7 +137,11 @@ def _first_value(values: Dict[str, Any], keys: List[str]) -> Optional[float]:
 
 
 def _ensure_list(value: float) -> List[float]:
-    return [float(value), float(value)]
+    # Return a genuine single-element list.
+    # valuation_dcf requires at least 2 periods; with only one FCF available it
+    # will raise ValueError, which run_models catches and records as a warning.
+    # Previously this duplicated the value ([v, v]), silently inflating DCF estimates.
+    return [float(value)]
 
 
 def _extract_fcf_from_reports(reports: List[Dict[str, Any]]) -> List[float]:

@@ -110,11 +110,13 @@ func (s *server) handleAgentResult(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, agentResultResponse{
-		RunID:    run.RunID,
-		Status:   run.Status,
-		Answer:   run.Answer,
-		Sources:  run.Sources,
-		Warnings: run.Warnings,
+		RunID:      run.RunID,
+		Status:     run.Status,
+		Answer:     run.Answer,
+		Confidence: run.Confidence,
+		Valuations: run.Valuations,
+		Sources:    run.Sources,
+		Warnings:   run.Warnings,
 	})
 }
 
@@ -143,9 +145,12 @@ func (s *server) executeAgentRun(runID string, req agentRunRequest) {
 	}
 
 	result := memory.AgentRun{
-		RunID:  runID,
-		Status: "completed",
-		Answer: resp.Answer,
+		RunID:      runID,
+		Status:     "completed",
+		Answer:     resp.Answer,
+		Confidence: resp.Confidence,
+		Valuations: resp.Valuations,
+		Sources:    resp.Sources,
 	}
 	_ = s.store.SaveAgentRun(ctx, result)
 	_ = s.cache.Set(ctx, cacheKeyStatus(runID), "completed", 5*time.Minute)
@@ -198,4 +203,5 @@ type agentServiceResponse struct {
 	Answer     string                   `json:"answer"`
 	Confidence int                      `json:"confidence"`
 	Valuations []map[string]interface{} `json:"valuations"`
+	Sources    []string                 `json:"sources"`
 }

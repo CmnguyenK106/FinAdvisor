@@ -18,6 +18,7 @@ class AgentResponse(BaseModel):
     answer: str
     confidence: int
     valuations: list
+    sources: list[str] = []
 
 
 def create_app() -> FastAPI:
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
             answer=result.get("answer", ""),
             confidence=result.get("confidence", 0),
             valuations=result.get("valuations", []),
+            sources=result.get("sources", []),
         )
 
     return app

@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
+
 
 @dataclass
 class AgentConfig:
@@ -17,11 +19,12 @@ class AgentConfig:
 
 
 def load_config() -> AgentConfig:
+    load_dotenv()
     return AgentConfig(
         gateway_url=os.getenv("GATEWAY_URL", "http://localhost:8081"),
         openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
         openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        openrouter_model=os.getenv("OPENROUTER_MODEL", "google/gemma-4-9b-it"),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash:free"),
         max_iterations=int(os.getenv("AGENT_MAX_ITERATIONS", "2")),
         min_confidence=int(os.getenv("AGENT_MIN_CONFIDENCE", "60")),
     )

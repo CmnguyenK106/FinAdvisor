@@ -27,9 +27,11 @@ type agentStatusResponse struct {
 
 // agentResultResponse contains the final response payload.
 type agentResultResponse struct {
-	RunID    string   `json:"run_id"`
-	Status   string   `json:"status"`
-	Answer   string   `json:"answer,omitempty"`
-	Sources  []string `json:"sources,omitempty"`
-	Warnings []string `json:"warnings,omitempty"`
+	RunID      string                   `json:"run_id"`
+	Status     string                   `json:"status"`
+	Answer     string                   `json:"answer,omitempty"`
+	Confidence int                      `json:"confidence,omitempty"`
+	Valuations []map[string]interface{} `json:"valuations,omitempty"`
+	Sources    []string                 `json:"sources,omitempty"`
+	Warnings   []string                 `json:"warnings,omitempty"`
 }

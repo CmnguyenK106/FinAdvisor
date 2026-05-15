@@ -9,9 +9,13 @@ import (
 	"log"
 
 	"chatbot/memory"
+
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	_ = godotenv.Load()
+	_ = godotenv.Load("../.env")
 	cfg := loadConfig()
 	memCfg := memory.LoadConfig()
 	ctx := context.Background()

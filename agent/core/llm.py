@@ -9,7 +9,7 @@ from .config import AgentConfig
 
 def build_llm(cfg: AgentConfig) -> ChatOpenAI:
     return ChatOpenAI(
-        api_key=cfg.openrouter_api_key,
+        openai_api_key=cfg.openrouter_api_key,
         base_url=cfg.openrouter_base_url,
         model=cfg.openrouter_model,
         temperature=0.2,

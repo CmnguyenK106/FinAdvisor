@@ -11,8 +11,11 @@ class AgentState(TypedDict, total=False):
     symbol: Optional[str]
     plan: Dict[str, Any]
     data: Dict[str, Any]
-    news: Dict[str, Any]
+    sources: List[str]
     valuations: List[Dict[str, Any]]
+    # CAPM result is stored separately because it is a cost-of-equity estimate,
+    # not a price estimate, and must not pollute the valuations confidence average.
+    capm_result: Optional[Dict[str, Any]]
     answer: str
     confidence: int
     warnings: List[str]
