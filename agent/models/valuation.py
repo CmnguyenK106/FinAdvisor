@@ -97,8 +97,8 @@ def valuation_multiples(
         }
     }
 
-    if eps is not None and pe_multiple:
-        _require_positive("eps", eps)
+    if eps is not None and pe_multiple and eps > 0:
+        # Skip P/E for loss-making companies (negative EPS is valid data, not an error).
         _require_positive("pe_multiple", pe_multiple)
         estimates.append(eps * pe_multiple)
 

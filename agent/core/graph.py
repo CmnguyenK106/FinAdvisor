@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+import re
+from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
@@ -23,27 +24,68 @@ from .llm import build_llm
 from .state import AgentState
 from .tools import DataGatewayClient
 
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
 
-def build_agent_graph(cfg: AgentConfig) -> StateGraph:
-    llm = build_llm(cfg)
-    data_client = DataGatewayClient(cfg.gateway_url)
+# Strips  ```json ... ```  or  ``` ... ```  wrappers that some LLMs add.
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
 
-    graph = StateGraph(AgentState)
+# Common English and Vietnamese words that match the 2-5-alpha rule but are
+# never ticker symbols.  Extend as needed.
+_SYMBOL_STOP_WORDS: frozenset[str] = frozenset({
+    "A", "AN", "THE", "AND", "OR", "OF", "IN", "ON", "AT", "TO", "BY",
+    "IS", "IT", "BE", "DO", "GO", "HAS", "WAS", "ARE", "FOR", "NOT",
+    "WITH", "FROM", "THAT", "THIS", "HAVE", "GIVE", "WILL", "THAN",
+    "THEN", "THEY", "THEM", "WHAT", "WHEN", "WHICH", "WHO", "HOW",
+    "ABOUT", "STOCK", "SHARE", "PRICE", "FUND", "RATIO",
+    # Vietnamese common words (ASCII-uppercased, no diacritics)
+    "MUA", "BAN", "CO", "LA", "VA", "DE", "NEN", "KHI", "VOI", "THEO",
+    "HOI", "TAI", "HOA", "HOP", "GIA", "TI", "CHI", "THE", "NHUNG",
+})
 
-    def plan_step(state: AgentState) -> AgentState:
+
+# ---------------------------------------------------------------------------
+# AgentNodes class
+# ---------------------------------------------------------------------------
+
+class AgentNodes:
+    """Encapsulates all LangGraph node functions with injected dependencies.
+
+    Extracting node logic from closures into a class makes each node
+    individually unit-testable: pass in a mock LLM and mock DataGatewayClient.
+    """
+
+    def __init__(
+        self,
+        cfg: AgentConfig,
+        llm: Any,
+        data_client: DataGatewayClient,
+    ) -> None:
+        self._cfg = cfg
+        self._llm = llm
+        self._data_client = data_client
+
+    # ------------------------------------------------------------------
+    # Node: planner
+    # ------------------------------------------------------------------
+
+    def plan_step(self, state: AgentState) -> AgentState:
         query = state.get("query", "")
         system = SystemMessage(
             content=(
                 "You are a finance planning assistant. Extract the ticker symbol, "
-                "decide which data you need, and suggest valuation models. "
-                "Return JSON with keys: symbol, needs_price, needs_financials, "
-                "needs_ratios, valuation_models."
+                "decide which data you need, and suggest valuation models.\n"
+                "You MUST return ONLY raw JSON — no markdown fences, no extra text.\n"
+                "Keys: symbol (string), needs_price (bool), needs_financials (bool), "
+                "needs_ratios (bool), valuation_models (list of strings).\n"
+                "Valid valuation_models values: multiples, dcf, ddm, book_value, graham."
             )
         )
-        response = llm.invoke([system, HumanMessage(content=query)])
+        response = self._llm.invoke([system, HumanMessage(content=query)])
         plan: Dict[str, Any]
         try:
-            plan = json.loads(response.content)
+            plan = _parse_json_response(response.content)
         except Exception:
             plan = {
                 "symbol": _extract_symbol(query),
@@ -56,10 +98,14 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
         state["plan"] = plan
         state["symbol"] = plan.get("symbol")
         state["iterations"] = state.get("iterations", 0)
-        state["max_iterations"] = cfg.max_iterations
+        state["max_iterations"] = self._cfg.max_iterations
         return state
 
-    def fetch_data(state: AgentState) -> AgentState:
+    # ------------------------------------------------------------------
+    # Node: fetch_data
+    # ------------------------------------------------------------------
+
+    def fetch_data(self, state: AgentState) -> AgentState:
         symbol = state.get("symbol")
         plan = state.get("plan", {})
         data: Dict[str, Any] = state.get("data", {})
@@ -71,24 +117,21 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
             state["warnings"] = warnings
             return state
 
-        # Each fetch is guarded individually so a single endpoint failure
-        # (network error, non-2xx response) records a warning and allows
-        # the graph to continue with whatever partial data is available.
         if plan.get("needs_price"):
             try:
-                data["price_history"] = data_client.price_history(symbol)
+                data["price_history"] = self._data_client.price_history(symbol)
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"price_history fetch failed for {symbol}: {exc}")
 
         if plan.get("needs_financials"):
             try:
-                data["financials"] = data_client.financials(symbol)
+                data["financials"] = self._data_client.financials(symbol)
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"financials fetch failed for {symbol}: {exc}")
 
         if plan.get("needs_ratios"):
             try:
-                data["ratios"] = data_client.ratios(symbol)
+                data["ratios"] = self._data_client.ratios(symbol)
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"ratios fetch failed for {symbol}: {exc}")
 
@@ -99,13 +142,18 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
         state["sources"] = sources
         return state
 
-    def run_models(state: AgentState) -> AgentState:
+    # ------------------------------------------------------------------
+    # Node: run_models
+    # ------------------------------------------------------------------
+
+    def run_models(self, state: AgentState) -> AgentState:
         models = state.get("plan", {}).get("valuation_models", [])
         valuations: List[Dict[str, Any]] = []
         data = state.get("data", {})
         warnings: List[str] = state.get("warnings", [])
 
-        metrics = _extract_metrics(data)
+        metrics = extract_fireant_metrics(data)
+
         if "multiples" in models:
             try:
                 valuations.append(
@@ -177,11 +225,8 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
             except ValueError as exc:
                 warnings.append(f"graham skipped: {exc}")
 
-        # CAPM yields a cost-of-equity rate, not a share-price estimate.
-        # Storing it in `valuations` caused _aggregate_confidence to silently
-        # score it as 0 (no "confidence" key) and drag the aggregate down.
-        # It is stored in its own state field and forwarded to the LLM separately.
-        capm: Dict[str, Any] | None = None
+        # CAPM → cost-of-equity rate, stored separately (not a price estimate).
+        capm: Optional[Dict[str, Any]] = None
         if metrics.get("beta") is not None:
             capm = estimate_cost_of_equity_capm(
                 risk_free_rate=metrics.get("risk_free_rate", 0.04),
@@ -195,40 +240,88 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
         state["confidence"] = _aggregate_confidence(valuations)
         return state
 
-    def draft_answer(state: AgentState) -> AgentState:
+    # ------------------------------------------------------------------
+    # Node: draft_answer
+    # ------------------------------------------------------------------
+
+    def draft_answer(self, state: AgentState) -> AgentState:
+        locale = state.get("locale", "vi")
+        currency = "VND" if locale == "vi" else "USD"
+        lang = "Vietnamese" if locale == "vi" else "English"
+
         system = SystemMessage(
             content=(
-                "You are an investment analyst. Use the provided valuations to answer "
-                "the query. Provide a short recommendation and cite sources."
+                "You are a professional investment analyst covering Vietnam-listed equities.\n"
+                f"User locale: '{locale}'. All prices are in {currency}.\n\n"
+                "You receive a JSON payload with:\n"
+                "  • query – the user's original question\n"
+                "  • symbol – the ticker\n"
+                "  • valuations – list of price-estimate models, each containing:\n"
+                "      - model: model name\n"
+                "      - estimate: fair-value price\n"
+                "      - range.low / range.high: sensitivity range\n"
+                "      - confidence: 0-100 (higher = more reliable)\n"
+                "  • cost_of_equity_capm (optional) – CAPM required return\n"
+                "  • warnings – data quality issues\n\n"
+                "Your response must:\n"
+                "1. Summarise each model's estimate and confidence in plain language.\n"
+                "2. Give a consensus fair-value range (weight by confidence).\n"
+                "3. Compare the consensus to the current market price when available.\n"
+                "4. Issue a clear signal: BUY / HOLD / SELL with a brief rationale.\n"
+                "5. Note any warnings that affect analysis reliability.\n"
+                "6. End with: 'This is not personal financial advice.'\n"
+                f"Respond in {lang}."
             )
         )
         payload: Dict[str, Any] = {
             "query": state.get("query"),
             "symbol": state.get("symbol"),
             "valuations": state.get("valuations", []),
+            "warnings": state.get("warnings", []),
         }
-        # Include CAPM cost-of-equity as supplemental context when available.
         if state.get("capm_result"):
             payload["cost_of_equity_capm"] = state["capm_result"]
-        response = llm.invoke([system, HumanMessage(content=json.dumps(payload))])
+
+        response = self._llm.invoke([system, HumanMessage(content=json.dumps(payload))])
         state["answer"] = response.content
         return state
 
-    def evaluate(state: AgentState) -> AgentState:
+    # ------------------------------------------------------------------
+    # Node: evaluate
+    # ------------------------------------------------------------------
+
+    def evaluate(self, state: AgentState) -> AgentState:
         iterations = state.get("iterations", 0)
         confidence = state.get("confidence", 0)
-        missing_data = _missing_data(state.get("data", {}))
-        should_retry = confidence < cfg.min_confidence and missing_data and iterations < cfg.max_iterations
-
+        missing = _missing_financial_data(state.get("data", {}))
+        should_retry = (
+            confidence < self._cfg.min_confidence
+            and missing
+            and iterations < self._cfg.max_iterations
+        )
         state["should_retry"] = should_retry
         state["iterations"] = iterations + 1
         return state
 
-    graph.add_node("planner", plan_step)
-    graph.add_node("fetch_data", fetch_data)
-    graph.add_node("run_models", run_models)
-    graph.add_node("draft_answer", draft_answer)
-    graph.add_node("evaluate", evaluate)
+
+# ---------------------------------------------------------------------------
+# Graph builder
+# ---------------------------------------------------------------------------
+
+def build_agent_graph(cfg: AgentConfig) -> StateGraph:
+    """Compile the LangGraph workflow.
+
+    Dependencies are injected into AgentNodes so that each node method
+    can be unit-tested independently with mocked collaborators.
+    """
+    nodes = AgentNodes(cfg, build_llm(cfg), DataGatewayClient(cfg.gateway_url))
+
+    graph = StateGraph(AgentState)
+    graph.add_node("planner", nodes.plan_step)
+    graph.add_node("fetch_data", nodes.fetch_data)
+    graph.add_node("run_models", nodes.run_models)
+    graph.add_node("draft_answer", nodes.draft_answer)
+    graph.add_node("evaluate", nodes.evaluate)
 
     graph.set_entry_point("planner")
     graph.add_edge("planner", "fetch_data")
@@ -240,48 +333,58 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
         return "fetch_data" if state.get("should_retry") else END
 
     graph.add_conditional_edges("evaluate", route, {"fetch_data": "fetch_data", END: END})
-
     return graph
 
 
-# Common English and Vietnamese words that are NOT ticker symbols.
-# Extend this set if the LLM planner ever fails for a new query pattern.
-_SYMBOL_STOP_WORDS: frozenset[str] = frozenset({
-    # English stop-words that match the 2-5 alpha rule
-    "A", "AN", "THE", "AND", "OR", "OF", "IN", "ON", "AT", "TO", "BY",
-    "IS", "IT", "BE", "DO", "GO", "HAS", "WAS", "ARE", "FOR", "NOT",
-    "WITH", "FROM", "THAT", "THIS", "HAVE", "GIVE", "WILL", "THAN",
-    "THEN", "THEY", "THEM", "WHAT", "WHEN", "WHICH", "WHO", "HOW",
-    "ABOUT", "STOCK", "SHARE", "PRICE", "FUND", "RATIO",
-    # Vietnamese common words (no diacritics, uppercased)
-    "MUA", "BAN", "CO", "LA", "VA", "DE", "NEN", "KHI", "VOI", "THEO",
-    "HOI", "TAI", "HOA", "HOP", "GIA", "TI", "CHI", "THE", "NHUNG",
-})
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
 
+def _parse_json_response(content: str) -> Dict[str, Any]:
+    """Parse a JSON string, stripping markdown fences if present.
 
-def _extract_symbol(query: str) -> str | None:
-    """Best-effort ticker extraction used only when the LLM planner fails.
-
-    Scans tokens for a 2-5 character alphabetic string that is not a
-    known stop-word.  Returns the first candidate, or None.
+    Some LLMs wrap their output in ```json ... ``` even when instructed not to.
+    This strips the fence before parsing so plan_step never silently falls back.
     """
-    tokens = [token.strip().upper() for token in query.split()]
-    for token in tokens:
-        if 2 <= len(token) <= 5 and token.isalpha() and token not in _SYMBOL_STOP_WORDS:
-            return token
+    content = content.strip()
+    match = _JSON_FENCE_RE.search(content)
+    if match:
+        content = match.group(1).strip()
+    return json.loads(content)
+
+
+def _extract_symbol(query: str) -> Optional[str]:
+    """Best-effort ticker extraction — only used when the LLM planner fails.
+
+    Returns the first 2-5-character all-alpha token that is not a known
+    stop-word, or None if no candidate is found.
+    """
+    for token in query.split():
+        t = token.strip().upper()
+        if 2 <= len(t) <= 5 and t.isalpha() and t not in _SYMBOL_STOP_WORDS:
+            return t
     return None
 
 
-def _extract_metrics(data: Dict[str, Any]) -> Dict[str, Any]:
-    return extract_fireant_metrics(data)
-
-
 def _aggregate_confidence(valuations: List[Dict[str, Any]]) -> int:
-    scores = [val.get("confidence", 0) for val in valuations if isinstance(val, dict)]
+    scores = [v.get("confidence", 0) for v in valuations if isinstance(v, dict)]
     if not scores:
         return 0
     return int(sum(scores) / len(scores))
 
 
-def _missing_data(data: Dict[str, Any]) -> bool:
-    return not bool(data)
+def _missing_financial_data(data: Dict[str, Any]) -> bool:
+    """Return True when data is absent or is missing key financial fields.
+
+    The old `not bool(data)` only fired when the dict was completely empty,
+    so a partial fetch (e.g. price OK but financials missing) never triggered
+    a retry even when confidence was below the threshold.
+
+    A run is considered data-deficient when it lacks both fundamental ratios
+    and periodic financials, since most valuation models require at least one.
+    """
+    if not data:
+        return True
+    has_fundamentals = "ratios" in data or "fundamental" in data
+    has_financials = "financials" in data
+    return not (has_fundamentals and has_financials)

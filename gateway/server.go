@@ -6,21 +6,39 @@ Purpose: Wires the HTTP server, routes, and listener configuration.
 
 import (
 	"net/http"
+	"time"
 
 	"chatbot/memory"
 )
 
 type server struct {
-	cfg   config
-	cache memory.Cache
-	store memory.Storage
-	data  *dataGateway
-	mux   *http.ServeMux
+	cfg        config
+	cache      memory.Cache
+	store      memory.Storage
+	data       *dataGateway
+	mux        *http.ServeMux
+	// httpClient is shared across all outbound calls to the agent service.
+	// Creating a client per-request bypasses connection pooling.
+	httpClient *http.Client
 }
 
 func newServer(cfg config, cache memory.Cache, store memory.Storage) *server {
 	data := newDataGateway(cfg, cache)
-	s := &server{cfg: cfg, cache: cache, store: store, data: data, mux: http.NewServeMux()}
+	s := &server{
+		cfg:   cfg,
+		cache: cache,
+		store: store,
+		data:  data,
+		mux:   http.NewServeMux(),
+		httpClient: &http.Client{
+			Timeout: 90 * time.Second,
+			Transport: &http.Transport{
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 20,
+				IdleConnTimeout:     90 * time.Second,
+			},
+		},
+	}
 	s.registerRoutes()
 	return s
 }

@@ -12,7 +12,10 @@ def extract_fireant_metrics(data: Dict[str, Any], as_of: Optional[datetime] = No
 
     metrics: Dict[str, Any] = {}
 
-    fundamental = _get_envelope_data(data, "ratios") or _get_envelope_data(data, "fundamental")
+    # Only "ratios" is populated by the graph (via DataGatewayClient.ratios).
+    # The former "fundamental" alias has been removed to avoid implying that
+    # /data/fundamental is ever fetched.
+    fundamental = _get_envelope_data(data, "ratios")
     if isinstance(fundamental, dict):
         metrics["market_cap"] = fundamental.get("market_cap")
         metrics["pe_multiple"] = fundamental.get("pe_multiple")

@@ -41,8 +41,11 @@ class DataGatewayClient:
         return self._get("/data/financials", {"symbol": symbol})
 
     def ratios(self, symbol: str) -> Dict[str, Any]:
+        """Fetch fundamental ratios (P/E, P/B, EPS, ROE) from the gateway.
+
+        The `fundamental()` method that previously existed here was removed
+        because it was never called by the graph — `/data/ratios` is the
+        single source for fundamental data.  The mapper alias for "fundamental"
+        has also been removed from fireant_mapper.py.
+        """
         return self._get("/data/ratios", {"symbol": symbol})
-
-    def fundamental(self, symbol: str) -> Dict[str, Any]:
-	    return self._get("/data/fundamental", {"symbol": symbol})
-

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"chatbot/memory"
+	"github.com/google/uuid"
 )
 
 func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -120,8 +121,11 @@ func (s *server) handleAgentResult(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// newRunID returns a collision-free UUID v4 string suitable for use as a run
+// identifier.  The previous timestamp-based approach had a nanosecond-level
+// collision window under concurrent load.
 func newRunID() string {
-	return time.Now().UTC().Format("20060102T150405.000000000Z")
+	return uuid.New().String()
 }
 
 func cacheKeyStatus(runID string) string {
@@ -174,8 +178,10 @@ func (s *server) callAgentService(ctx context.Context, req agentRunRequest) (age
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Do(httpReq)
+	// Reuse the shared client instead of creating one per call.
+	// A per-call client bypasses TCP connection pooling and can exhaust
+	// file descriptors under sustained concurrency.
+	resp, err := s.httpClient.Do(httpReq)
 	if err != nil {
 		return agentServiceResponse{}, err
 	}
