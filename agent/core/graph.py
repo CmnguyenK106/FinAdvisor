@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, StateGraph
 
 from agent.mappers.fireant_mapper import extract_fireant_metrics
@@ -20,15 +20,15 @@ from agent.models.valuation import (
 )
 
 from .config import AgentConfig
-from .llm import build_llm
-from .state import AgentState
+from .llm import PlanSchema, build_llm, build_structured_llm
+from .state import AgentState, HistoryMessage
 from .tools import DataGatewayClient
 
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
 
-# Strips  ```json ... ```  or  ``` ... ```  wrappers that some LLMs add.
+# Fallback: strips ```json ... ``` wrappers when structured output is unavailable.
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```", re.IGNORECASE)
 
 # Common English and Vietnamese words that match the 2-5-alpha rule but are
@@ -44,6 +44,9 @@ _SYMBOL_STOP_WORDS: frozenset[str] = frozenset({
     "HOI", "TAI", "HOA", "HOP", "GIA", "TI", "CHI", "THE", "NHUNG",
 })
 
+# Maximum number of history turns to include in the planner context.
+_MAX_HISTORY_TURNS = 6
+
 
 # ---------------------------------------------------------------------------
 # AgentNodes class
@@ -52,48 +55,83 @@ _SYMBOL_STOP_WORDS: frozenset[str] = frozenset({
 class AgentNodes:
     """Encapsulates all LangGraph node functions with injected dependencies.
 
-    Extracting node logic from closures into a class makes each node
-    individually unit-testable: pass in a mock LLM and mock DataGatewayClient.
+    Injecting llm, structured_llm, and data_client allows each node method
+    to be unit-tested in isolation with mocked collaborators.
     """
 
     def __init__(
         self,
         cfg: AgentConfig,
         llm: Any,
+        structured_llm: Any,
         data_client: DataGatewayClient,
     ) -> None:
         self._cfg = cfg
         self._llm = llm
+        self._structured_llm = structured_llm
         self._data_client = data_client
 
     # ------------------------------------------------------------------
-    # Node: planner
+    # Node: planner  (structured output + conversation memory)
     # ------------------------------------------------------------------
 
     def plan_step(self, state: AgentState) -> AgentState:
         query = state.get("query", "")
+        history: List[HistoryMessage] = state.get("history", [])
+
         system = SystemMessage(
             content=(
-                "You are a finance planning assistant. Extract the ticker symbol, "
-                "decide which data you need, and suggest valuation models.\n"
-                "You MUST return ONLY raw JSON — no markdown fences, no extra text.\n"
-                "Keys: symbol (string), needs_price (bool), needs_financials (bool), "
-                "needs_ratios (bool), valuation_models (list of strings).\n"
-                "Valid valuation_models values: multiples, dcf, ddm, book_value, graham."
+                "You are a finance planning assistant for Vietnam-listed equities.\n"
+                "Given the conversation history and the latest user query, extract:\n"
+                "  • symbol      – ticker (e.g. VNM). Infer from history if omitted.\n"
+                "  • needs_price – whether to fetch historical prices.\n"
+                "  • needs_financials – whether to fetch income/balance/cash-flow data.\n"
+                "  • needs_ratios – whether to fetch P/E, P/B, EPS, ROE ratios.\n"
+                "  • needs_reports – whether to fetch financial reports per period.\n"
+                "  • needs_posts – whether to fetch posts about company.\n"
+                "  • needs_estimated_price – whether to fetch value estimation.\n"
+                "  • valuation_models – which models to run.\n"
+                "Valid models: multiples, dcf, ddm, book_value, graham."
             )
         )
-        response = self._llm.invoke([system, HumanMessage(content=query)])
+
+        # Build message list: system + last N history turns + current query.
+        messages: list = [system]
+        for turn in history[-_MAX_HISTORY_TURNS:]:
+            if turn["role"] == "user":
+                messages.append(HumanMessage(content=turn["content"]))
+            else:
+                messages.append(AIMessage(content=turn["content"]))
+        messages.append(HumanMessage(content=query))
+
         plan: Dict[str, Any]
         try:
-            plan = _parse_json_response(response.content)
+            # Primary path: structured output — always returns a valid PlanSchema.
+            result: PlanSchema = self._structured_llm.invoke(messages)
+            plan = result.model_dump()
+            
+            # Free models often hallucinate empty lists or False for required fields
+            if not plan.get("valuation_models"):
+                plan["valuation_models"] = ["multiples", "dcf"]
+            for flag in ["needs_price", "needs_financials", "needs_ratios", "needs_reports", "needs_posts", "needs_estimated_price"]:
+                if plan.get(flag) is False:
+                    plan[flag] = True
         except Exception:
-            plan = {
-                "symbol": _extract_symbol(query),
-                "needs_price": True,
-                "needs_financials": True,
-                "needs_ratios": True,
-                "valuation_models": ["multiples", "dcf"],
-            }
+            # Fallback: plain LLM + JSON parsing (e.g. provider lacks tool-calling).
+            try:
+                raw = self._llm.invoke(messages)
+                plan = _parse_json_response(raw.content)
+            except Exception:
+                plan = {
+                    "symbol": _extract_symbol(query) or _symbol_from_history(history),
+                    "needs_price": True,
+                    "needs_financials": True,
+                    "needs_ratios": True,
+                    "needs_reports": True,
+                    "needs_posts": True,
+                    "needs_estimated_price": True,
+                    "valuation_models": ["multiples", "dcf"],
+                }
 
         state["plan"] = plan
         state["symbol"] = plan.get("symbol")
@@ -134,6 +172,24 @@ class AgentNodes:
                 data["ratios"] = self._data_client.ratios(symbol)
             except Exception as exc:  # noqa: BLE001
                 warnings.append(f"ratios fetch failed for {symbol}: {exc}")
+
+        if plan.get("needs_reports"):
+            try:
+                data["reports"] = self._data_client.reports(symbol)
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"reports fetch failed for {symbol}: {exc}")
+
+        if plan.get("needs_posts"):
+            try:
+                data["posts"] = self._data_client.posts(symbol)
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"posts fetch failed for {symbol}: {exc}")
+
+        if plan.get("needs_estimated_price"):
+            try:
+                data["estimated_price"] = self._data_client.estimated_price(symbol)
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"estimated_price fetch failed for {symbol}: {exc}")
 
         state["data"] = data
         state["warnings"] = warnings
@@ -225,7 +281,6 @@ class AgentNodes:
             except ValueError as exc:
                 warnings.append(f"graham skipped: {exc}")
 
-        # CAPM → cost-of-equity rate, stored separately (not a price estimate).
         capm: Optional[Dict[str, Any]] = None
         if metrics.get("beta") is not None:
             capm = estimate_cost_of_equity_capm(
@@ -241,10 +296,11 @@ class AgentNodes:
         return state
 
     # ------------------------------------------------------------------
-    # Node: draft_answer
+    # Node: draft_answer  (supports both invoke and stream)
     # ------------------------------------------------------------------
 
-    def draft_answer(self, state: AgentState) -> AgentState:
+    def _build_draft_messages(self, state: AgentState) -> list:
+        """Build the message list for the draft_answer LLM call."""
         locale = state.get("locale", "vi")
         currency = "VND" if locale == "vi" else "USD"
         lang = "Vietnamese" if locale == "vi" else "English"
@@ -262,29 +318,64 @@ class AgentNodes:
                 "      - range.low / range.high: sensitivity range\n"
                 "      - confidence: 0-100 (higher = more reliable)\n"
                 "  • cost_of_equity_capm (optional) – CAPM required return\n"
+                "  • posts (optional) – recent news or expert posts about the company\n"
+                "  • estimated_price (optional) – analyst value estimation\n"
                 "  • warnings – data quality issues\n\n"
                 "Your response must:\n"
                 "1. Summarise each model's estimate and confidence in plain language.\n"
                 "2. Give a consensus fair-value range (weight by confidence).\n"
-                "3. Compare the consensus to the current market price when available.\n"
-                "4. Issue a clear signal: BUY / HOLD / SELL with a brief rationale.\n"
-                "5. Note any warnings that affect analysis reliability.\n"
-                "6. End with: 'This is not personal financial advice.'\n"
+                "3. Compare the consensus to the current market price when available, and to the analyst estimated_price if provided.\n"
+                "4. Incorporate sentiment and insights from recent posts if provided.\n"
+                "5. Issue a clear signal: BUY / HOLD / SELL with a brief rationale.\n"
+                "6. Note any warnings that affect analysis reliability.\n"
+                "7. End with: 'This is not personal financial advice.'\n"
                 f"Respond in {lang}."
             )
         )
+
         payload: Dict[str, Any] = {
             "query": state.get("query"),
             "symbol": state.get("symbol"),
             "valuations": state.get("valuations", []),
             "warnings": state.get("warnings", []),
         }
+        data = state.get("data", {})
+        if "posts" in data:
+            payload["posts"] = data["posts"]
+        if "estimated_price" in data:
+            payload["estimated_price"] = data["estimated_price"]
         if state.get("capm_result"):
             payload["cost_of_equity_capm"] = state["capm_result"]
 
-        response = self._llm.invoke([system, HumanMessage(content=json.dumps(payload))])
+        return [system, HumanMessage(content=json.dumps(payload))]
+
+    def draft_answer(self, state: AgentState) -> AgentState:
+        """Non-streaming node used by the standard graph.invoke() path."""
+        messages = self._build_draft_messages(state)
+        response = self._llm.invoke(messages)
         state["answer"] = response.content
         return state
+
+    def stream_answer(self, state: AgentState) -> Iterator[str]:
+        """Yield answer tokens one chunk at a time for SSE streaming.
+
+        This is NOT a graph node — it is called directly by the /agent/stream
+        endpoint after all non-streaming nodes have completed.
+        """
+        messages = self._build_draft_messages(state)
+        for chunk in self._llm.stream(messages):
+            if chunk.content:
+                yield chunk.content
+
+    async def astream_answer(self, state: AgentState) -> AsyncIterator[str]:
+        """Async variant of stream_answer for use with FastAPI async endpoints."""
+        messages = self._build_draft_messages(state)
+        try:
+            async for chunk in self._llm.astream(messages):
+                if chunk.content:
+                    yield chunk.content
+        except Exception as e:
+            yield f"\n\n[System Error: LLM request failed: {e}]"
 
     # ------------------------------------------------------------------
     # Node: evaluate
@@ -311,10 +402,17 @@ class AgentNodes:
 def build_agent_graph(cfg: AgentConfig) -> StateGraph:
     """Compile the LangGraph workflow.
 
-    Dependencies are injected into AgentNodes so that each node method
-    can be unit-tested independently with mocked collaborators.
+    The standard graph runs plan→fetch→models→draft→evaluate and uses
+    blocking llm.invoke() in draft_answer.  For streaming, callers should
+    run the graph up to (but not including) draft_answer, then call
+    nodes.stream_answer() / nodes.astream_answer() directly.
     """
-    nodes = AgentNodes(cfg, build_llm(cfg), DataGatewayClient(cfg.gateway_url))
+    nodes = AgentNodes(
+        cfg,
+        build_llm(cfg),
+        build_structured_llm(cfg),
+        DataGatewayClient(cfg.gateway_url),
+    )
 
     graph = StateGraph(AgentState)
     graph.add_node("planner", nodes.plan_step)
@@ -336,16 +434,40 @@ def build_agent_graph(cfg: AgentConfig) -> StateGraph:
     return graph
 
 
+def build_pre_draft_graph(cfg: AgentConfig) -> tuple[StateGraph, AgentNodes]:
+    """Build a graph that stops before draft_answer, plus the nodes object.
+
+    Used by the streaming endpoint: run this graph to get a fully-populated
+    state (symbol, data, valuations, confidence), then call
+    nodes.astream_answer(state) to stream the LLM response token-by-token.
+    """
+    nodes = AgentNodes(
+        cfg,
+        build_llm(cfg),
+        build_structured_llm(cfg),
+        DataGatewayClient(cfg.gateway_url),
+    )
+
+    graph = StateGraph(AgentState)
+    graph.add_node("planner", nodes.plan_step)
+    graph.add_node("fetch_data", nodes.fetch_data)
+    graph.add_node("run_models", nodes.run_models)
+    # No draft_answer or evaluate — stream endpoint handles those.
+
+    graph.set_entry_point("planner")
+    graph.add_edge("planner", "fetch_data")
+    graph.add_edge("fetch_data", "run_models")
+    graph.add_edge("run_models", END)
+
+    return graph, nodes
+
+
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
 def _parse_json_response(content: str) -> Dict[str, Any]:
-    """Parse a JSON string, stripping markdown fences if present.
-
-    Some LLMs wrap their output in ```json ... ``` even when instructed not to.
-    This strips the fence before parsing so plan_step never silently falls back.
-    """
+    """Fallback: parse JSON, stripping markdown fences if present."""
     content = content.strip()
     match = _JSON_FENCE_RE.search(content)
     if match:
@@ -354,15 +476,20 @@ def _parse_json_response(content: str) -> Dict[str, Any]:
 
 
 def _extract_symbol(query: str) -> Optional[str]:
-    """Best-effort ticker extraction — only used when the LLM planner fails.
-
-    Returns the first 2-5-character all-alpha token that is not a known
-    stop-word, or None if no candidate is found.
-    """
+    """Best-effort ticker extraction — only used when the LLM planner fails."""
     for token in query.split():
         t = token.strip().upper()
         if 2 <= len(t) <= 5 and t.isalpha() and t not in _SYMBOL_STOP_WORDS:
             return t
+    return None
+
+
+def _symbol_from_history(history: List[HistoryMessage]) -> Optional[str]:
+    """Scan recent history for a ticker when the current query omits it."""
+    for turn in reversed(history[-_MAX_HISTORY_TURNS:]):
+        candidate = _extract_symbol(turn["content"])
+        if candidate:
+            return candidate
     return None
 
 
@@ -374,15 +501,7 @@ def _aggregate_confidence(valuations: List[Dict[str, Any]]) -> int:
 
 
 def _missing_financial_data(data: Dict[str, Any]) -> bool:
-    """Return True when data is absent or is missing key financial fields.
-
-    The old `not bool(data)` only fired when the dict was completely empty,
-    so a partial fetch (e.g. price OK but financials missing) never triggered
-    a retry even when confidence was below the threshold.
-
-    A run is considered data-deficient when it lacks both fundamental ratios
-    and periodic financials, since most valuation models require at least one.
-    """
+    """True when key financial data is absent (partial fetch counts)."""
     if not data:
         return True
     has_fundamentals = "ratios" in data or "fundamental" in data

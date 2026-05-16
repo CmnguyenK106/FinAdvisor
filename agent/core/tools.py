@@ -49,3 +49,17 @@ class DataGatewayClient:
         has also been removed from fireant_mapper.py.
         """
         return self._get("/data/ratios", {"symbol": symbol})
+
+    def reports(self, symbol: str, report_type: int = 2, year: int | None = None, quarter: int | None = None, limit: int = 5) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"symbol": symbol, "type": report_type, "limit": limit}
+        if year:
+            params["year"] = year
+        if quarter:
+            params["quarter"] = quarter
+        return self._get("/data/reports", params)
+
+    def estimated_price(self, symbol: str) -> Dict[str, Any]:
+        return self._get("/data/estimated-price", {"symbol": symbol})
+
+    def posts(self, symbol: str, post_type: int = 1, offset: int = 0, limit: int = 20) -> Dict[str, Any]:
+        return self._get("/data/posts", {"symbol": symbol, "type": post_type, "offset": offset, "limit": limit})

@@ -6,11 +6,13 @@ Purpose: Defines shared request and response types for the gateway API.
 
 // agentRunRequest represents the payload from the web client.
 type agentRunRequest struct {
-	Query     string `json:"query"`
-	UserID    string `json:"user_id,omitempty"`
-	Asset     string `json:"asset,omitempty"`
-	Locale    string `json:"locale,omitempty"`
-	SessionID string `json:"session_id,omitempty"`
+	Query     string                   `json:"query"`
+	UserID    string                   `json:"user_id,omitempty"`
+	Asset     string                   `json:"asset,omitempty"`
+	Locale    string                   `json:"locale,omitempty"`
+	SessionID string                   `json:"session_id,omitempty"`
+	// History carries prior conversation turns for multi-turn memory.
+	History   []map[string]interface{} `json:"history,omitempty"`
 }
 
 // agentRunResponse is returned when a run is accepted.

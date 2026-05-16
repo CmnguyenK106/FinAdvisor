@@ -5,6 +5,12 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, TypedDict
 
 
+class HistoryMessage(TypedDict):
+    """A single turn of conversation history."""
+    role: str   # "user" | "assistant"
+    content: str
+
+
 class AgentState(TypedDict, total=False):
     query: str
     locale: str
@@ -22,3 +28,6 @@ class AgentState(TypedDict, total=False):
     iterations: int
     max_iterations: int
     should_retry: bool
+    # Conversation memory: prior turns passed in by the caller so the planner
+    # can resolve follow-up questions like "what about its debt?".
+    history: List[HistoryMessage]

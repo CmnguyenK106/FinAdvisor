@@ -56,6 +56,9 @@ func (s *server) registerRoutes() {
 	// Returns the final result for a given run ID.
 	s.mux.HandleFunc("/api/agent/result/", s.handleAgentResult)
 
+	// Streaming (SSE) endpoint — tokens arrive in real time.
+	s.mux.HandleFunc("/api/agent/stream", s.handleAgentStream)
+
 	// Data gateway endpoints (finance).
 	s.mux.HandleFunc("/data/price", s.handleDataPrice)
 	s.mux.HandleFunc("/data/fundamental", s.handleDataFundamental)

@@ -121,6 +121,77 @@ func (s *server) handleAgentResult(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleAgentStream proxies a streaming SSE request to the Python agent's
+// /agent/stream endpoint and forwards each event to the browser immediately.
+// Each SSE event is either:
+//   - {"type":"token","content":"..."} – one LLM output chunk
+//   - {"type":"done","confidence":N,"valuations":[...],...} – final metadata
+func (s *server) handleAgentStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if strings.TrimSpace(s.cfg.agentURL) == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "agent service not configured"})
+		return
+	}
+
+	var req agentRunRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request"})
+		return
+	}
+	if strings.TrimSpace(req.Query) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query is required"})
+		return
+	}
+
+	endpoint, err := url.JoinPath(s.cfg.agentURL, "/agent/stream")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "bad agent URL"})
+		return
+	}
+
+	payload := agentServiceRequest{Query: req.Query, Locale: req.Locale, History: req.History}
+	body, _ := json.Marshal(payload)
+
+	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to build request"})
+		return
+	}
+	upstream.Header.Set("Content-Type", "application/json")
+	upstream.Header.Set("Accept", "text/event-stream")
+
+	resp, err := s.httpClient.Do(upstream)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "agent stream unavailable"})
+		return
+	}
+	defer resp.Body.Close()
+
+	// Set SSE headers before any body bytes are written.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	flusher, canFlush := w.(http.Flusher)
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			_, _ = w.Write(buf[:n])
+			if canFlush {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			break
+		}
+	}
+}
+
 // newRunID returns a collision-free UUID v4 string suitable for use as a run
 // identifier.  The previous timestamp-based approach had a nanosecond-level
 // collision window under concurrent load.
@@ -166,7 +237,7 @@ func (s *server) callAgentService(ctx context.Context, req agentRunRequest) (age
 		return agentServiceResponse{}, err
 	}
 
-	payload := agentServiceRequest{Query: req.Query, Locale: req.Locale}
+	payload := agentServiceRequest{Query: req.Query, Locale: req.Locale, History: req.History}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return agentServiceResponse{}, err
@@ -201,8 +272,9 @@ func (s *server) callAgentService(ctx context.Context, req agentRunRequest) (age
 }
 
 type agentServiceRequest struct {
-	Query  string `json:"query"`
-	Locale string `json:"locale,omitempty"`
+	Query   string                   `json:"query"`
+	Locale  string                   `json:"locale,omitempty"`
+	History []map[string]interface{} `json:"history,omitempty"`
 }
 
 type agentServiceResponse struct {
